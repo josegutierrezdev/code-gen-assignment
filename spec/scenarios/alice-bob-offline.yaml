@@ -1,0 +1,106 @@
+name: alice-bob-offline
+title: Full store-and-forward loop with both sides going offline in turn
+requirements:
+  - REQ-SYNC-004
+  - REQ-SYNC-005
+  - REQ-SYNC-006
+  - REQ-SYNC-008
+  - REQ-SNF-003
+  - REQ-SNF-005
+  - REQ-SNF-007
+  - REQ-OUTBOX-002
+  - REQ-OUTBOX-004
+  - REQ-FLUSH-001
+  - REQ-STATE-007
+  - REQ-TESTHOOK-002
+actors: [alice, bob]
+
+steps:
+  # ---- both clients come up on a fresh data-dir and reach ONLINE ----
+  - {actor: alice, expect: {type: ready, state: NO_IDENTITY}, timeout_ms: 10000}
+  - {actor: alice, command: "login alice"}
+  - {actor: alice, expect: {type: logged_in, name: alice}}
+  - {actor: alice, expect: {type: state, from: NO_IDENTITY, to: CONNECTING}}
+  - {actor: alice, expect: {type: state, from: CONNECTING, to: SYNCING}}
+  - {actor: alice, expect: {type: state, from: SYNCING, to: ONLINE}}
+
+  - {actor: bob, expect: {type: ready, state: NO_IDENTITY}, timeout_ms: 10000}
+  - {actor: bob, command: "login bob"}
+  - {actor: bob, expect: {type: logged_in, name: bob}}
+  - {actor: bob, expect: {type: state, from: NO_IDENTITY, to: CONNECTING}}
+  - {actor: bob, expect: {type: state, from: CONNECTING, to: SYNCING}}
+  - {actor: bob, expect: {type: state, from: SYNCING, to: ONLINE}}
+
+  # ---- 1. Alice -> Bob, both online: queued, acked, delivered ----
+  - {actor: alice, command: "send bob Hi Bob, I have something important to tell you"}
+  - actor: alice
+    expect: {type: queued, to: bob, text: "Hi Bob, I have something important to tell you"}
+    capture: {m1: id}
+  - {actor: alice, expect: {type: sent, id: "$m1"}}
+  - actor: bob
+    expect: {type: received, id: "$m1", from: alice, text: "Hi Bob, I have something important to tell you"}
+    timeout_ms: 5000
+
+  # ---- 2. Bob -> Alice, both online ----
+  - {actor: bob, command: "send alice What is it?"}
+  - {actor: bob, expect: {type: queued, to: alice, text: "What is it?"}, capture: {m2: id}}
+  - {actor: bob, expect: {type: sent, id: "$m2"}}
+  - {actor: alice, expect: {type: received, id: "$m2", from: bob, text: "What is it?"}}
+
+  # ---- 3. Alice goes offline and queues a message (REQ-STATE-007) ----
+  - {actor: alice, command: "offline"}
+  - {actor: alice, expect: {type: state, from: ONLINE, to: OFFLINE}}
+  - {actor: alice, command: "send bob It can wait until you are back online"}
+  - actor: alice
+    expect: {type: queued, to: bob, text: "It can wait until you are back online"}
+    capture: {m3: id}
+  # nothing may be transmitted while OFFLINE, so no ack can arrive
+  - {actor: alice, expect_none: {type: sent}, window_ms: 1000}
+
+  # ---- 4. Bob goes offline and queues a message ----
+  - {actor: bob, command: "offline"}
+  - {actor: bob, expect: {type: state, from: ONLINE, to: OFFLINE}}
+  - {actor: bob, command: "send alice I am listening now"}
+  - actor: bob
+    expect: {type: queued, to: alice, text: "I am listening now"}
+    capture: {m4: id}
+  - {actor: bob, expect_none: {type: sent}, window_ms: 1000}
+
+  # ---- 5. Alice reconnects; her queued message is acked after sync_done ----
+  - {actor: alice, command: "online"}
+  - {actor: alice, expect: {type: state, from: OFFLINE, to: CONNECTING}}
+  - {actor: alice, expect: {type: state, from: CONNECTING, to: SYNCING}}
+  # Bob's m4 was never transmitted, so Alice has nothing held: pending is 0
+  - {actor: alice, expect: {type: state, from: SYNCING, to: ONLINE}}
+  - {actor: alice, expect: {type: sent, id: "$m3"}, timeout_ms: 5000}
+
+  # ---- 6. Alice goes offline again, before Bob ever sees m3 ----
+  - {actor: alice, command: "offline"}
+  - {actor: alice, expect: {type: state, from: ONLINE, to: OFFLINE}}
+
+  # ---- 7. Bob reconnects: held message is replayed BEFORE his outbox flushes ----
+  # This is the ordering contract of REQ-SYNC-005/006/008: the replayed msg arrives
+  # while SYNCING, and only after sync_done (SYNCING -> ONLINE) is m4 sent.
+  - {actor: bob, command: "online"}
+  - {actor: bob, expect: {type: state, from: OFFLINE, to: CONNECTING}}
+  - {actor: bob, expect: {type: state, from: CONNECTING, to: SYNCING}}
+  - actor: bob
+    expect: {type: received, id: "$m3", from: alice, text: "It can wait until you are back online"}
+    timeout_ms: 5000
+  - {actor: bob, expect: {type: state, from: SYNCING, to: ONLINE}}
+  - {actor: bob, expect: {type: sent, id: "$m4"}, timeout_ms: 5000}
+
+  # ---- 8. Alice reconnects and receives Bob's message: loop closed ----
+  - {actor: alice, command: "online"}
+  - {actor: alice, expect: {type: state, from: OFFLINE, to: CONNECTING}}
+  - {actor: alice, expect: {type: state, from: CONNECTING, to: SYNCING}}
+  - actor: alice
+    expect: {type: received, id: "$m4", from: bob, text: "I am listening now"}
+    timeout_ms: 5000
+  - {actor: alice, expect: {type: state, from: SYNCING, to: ONLINE}}
+
+  # ---- both outboxes are empty and nothing further is emitted ----
+  - {actor: alice, expect_none: {type: received}, window_ms: 1000}
+  - {actor: bob, expect_none: {type: received}, window_ms: 1000}
+  - {actor: alice, command: "quit"}
+  - {actor: bob, command: "quit"}

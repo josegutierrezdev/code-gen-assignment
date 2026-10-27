@@ -1,0 +1,58 @@
+name: restart-persistence
+title: A message queued while offline survives killing and relaunching the client
+requirements:
+  - REQ-OUTBOX-001
+  - REQ-OUTBOX-002
+  - REQ-OUTBOX-004
+  - REQ-OUTBOX-008
+  - REQ-PERSIST-002
+  - REQ-PERSIST-008
+  - REQ-IDENTITY-004
+actors: [alice, bob]
+
+# The client is killed abruptly, so it gets no chance to flush anything on the way out.
+# Everything that survives must already have been on disk before the network was touched.
+
+steps:
+  - {actor: alice, expect: {type: ready, state: NO_IDENTITY}, timeout_ms: 10000}
+  - {actor: alice, command: "login alice"}
+  - {actor: alice, expect: {type: logged_in, name: alice}}
+  - {actor: alice, expect: {type: state, from: NO_IDENTITY, to: CONNECTING}}
+  - {actor: alice, expect: {type: state, from: CONNECTING, to: SYNCING}}
+  - {actor: alice, expect: {type: state, from: SYNCING, to: ONLINE}}
+
+  - {actor: bob, expect: {type: ready, state: NO_IDENTITY}, timeout_ms: 10000}
+  - {actor: bob, command: "login bob"}
+  - {actor: bob, expect: {type: logged_in, name: bob}}
+  - {actor: bob, expect: {type: state, from: NO_IDENTITY, to: CONNECTING}}
+  - {actor: bob, expect: {type: state, from: CONNECTING, to: SYNCING}}
+  - {actor: bob, expect: {type: state, from: SYNCING, to: ONLINE}}
+
+  - {actor: alice, command: "offline"}
+  - {actor: alice, expect: {type: state, from: ONLINE, to: OFFLINE}}
+  - {actor: alice, command: "send bob Survives a restart"}
+  - actor: alice
+    expect: {type: queued, to: bob, text: "Survives a restart"}
+    capture: {m1: id}
+
+  # kill with the entry still in the outbox, unacked and never transmitted
+  - {actor: alice, kill: true}
+  - {actor: alice, start: true}
+
+  # REQ-IDENTITY-004: the stored identity is loaded, so ready reports OFFLINE and the
+  # client auto-connects without a login. REQ-OUTBOX-008: the restored entry must NOT
+  # re-emit queued -- a strict transcript would fail here if it did.
+  - {actor: alice, expect: {type: ready, state: OFFLINE}, timeout_ms: 10000}
+  - {actor: alice, expect: {type: logged_in, name: alice}}
+  - {actor: alice, expect: {type: state, from: OFFLINE, to: CONNECTING}}
+  - {actor: alice, expect: {type: state, from: CONNECTING, to: SYNCING}}
+  - {actor: alice, expect: {type: state, from: SYNCING, to: ONLINE}}
+  - {actor: alice, expect: {type: sent, id: "$m1"}, timeout_ms: 5000}
+
+  # the id survived the restart intact (REQ-MSGID-003), so Bob correlates it
+  - actor: bob
+    expect: {type: received, id: "$m1", from: alice, text: "Survives a restart"}
+    timeout_ms: 5000
+
+  - {actor: alice, command: "quit"}
+  - {actor: bob, command: "quit"}

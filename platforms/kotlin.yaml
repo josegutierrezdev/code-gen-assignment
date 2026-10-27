@@ -1,0 +1,64 @@
+# Platform manifest: Kotlin / JVM CLI
+# Consumed by the generator and by conformance/runner.py.
+# build_cmd and run_cmd both execute with cwd = out_dir.
+
+name: kotlin
+out_dir: clients/kotlin
+
+# Everything the generator is allowed to read as input, in order.
+spec_files:
+  - spec/core/README.md
+  - spec/core/protocol.md
+  - spec/core/client-behavior.md
+  - spec/core/cli-contract.md
+  - spec/platforms/kotlin.md
+
+build_cmd:
+  posix: ./gradlew --quiet --console=plain installDist
+  windows: gradlew.bat --quiet --console=plain installDist
+
+# Extra environment for build_cmd and run_cmd, merged onto the inherited
+# environment. ${repo_root} keeps this portable -- no absolute host paths.
+#
+# TEMP/TMP is REQUIRED on Windows, and is not a convenience: a Gradle build runs
+# in a daemon JVM, and JDK 16+ backs its NIO pipes with an AF_UNIX socket FILE
+# created in the temp directory. If that directory is unwritable or its volume is
+# full, Gradle dies with the badly worded
+#   java.io.IOException: Unable to establish loopback connection
+#   Caused by: java.net.SocketException: Invalid argument: connect
+# which looks like a networking fault and is not one. Pointing TEMP at a
+# directory inside the repo makes the build independent of the state of the
+# system drive. Verified: with TEMP on a full volume the build fails; with TEMP
+# redirected it succeeds, regardless of GRADLE_USER_HOME.
+#
+# GRADLE_USER_HOME is not needed for that fix; it keeps Gradle's 146 MB
+# distribution and build caches inside the repo instead of on the system drive.
+env:
+  posix: {}
+  windows:
+    TEMP: ${repo_root}\.gradle-tmp
+    TMP: ${repo_root}\.gradle-tmp
+    GRADLE_USER_HOME: ${repo_root}\.gradle-home
+
+# The runner appends --server <ws-url> --data-dir <path> (REQ-CLI-001).
+run_cmd:
+  posix: build/install/client/bin/client
+  windows: build\install\client\bin\client.bat
+
+# Everything a regeneration deletes first, so each run starts from scratch.
+#
+# The Gradle wrapper -- gradlew, gradlew.bat and gradle/wrapper/ -- is a
+# HAND-PROVIDED TOOLCHAIN BOOTSTRAP, not generated output. It is deliberately
+# absent from this list and MUST survive every clean and every regeneration;
+# the generator cannot recreate it, because producing it needs a real Gradle
+# install. Note that `clients/kotlin/.gradle` below is Gradle's local cache,
+# which is unrelated to `clients/kotlin/gradle/` and safe to delete.
+# See clients/kotlin/TOOLCHAIN.md.
+clean_globs:
+  - clients/kotlin/src
+  - clients/kotlin/settings.gradle.kts
+  - clients/kotlin/build.gradle.kts
+  - clients/kotlin/gradle.properties
+  - clients/kotlin/build
+  - clients/kotlin/.gradle
+  - clients/kotlin/.kotlin

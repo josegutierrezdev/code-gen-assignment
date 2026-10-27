@@ -1,0 +1,14 @@
+# HAND-WRITTEN, NOT generated.
+#
+# Dependencies for the hand-written halves of this repo -- the reference server
+# (server/) and the conformance harness (conformance/, scripts/). Install with:
+#
+#     python -m pip install -r requirements-dev.txt
+#
+# The generated Python client declares its own dependency on websockets in the
+# pyproject.toml the generator writes (spec/platforms/python.md); it is installed
+# by that platform's build_cmd, not from here.
+
+websockets>=14      # server transport, conformance's raw-frame tests
+pytest>=8           # server/tests and conformance/tests
+PyYAML>=6           # platform manifests and scenario files

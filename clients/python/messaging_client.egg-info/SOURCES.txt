@@ -1,0 +1,10 @@
+pyproject.toml
+client/__init__.py
+client/__main__.py
+client/core.py
+client/persistence.py
+messaging_client.egg-info/PKG-INFO
+messaging_client.egg-info/SOURCES.txt
+messaging_client.egg-info/dependency_links.txt
+messaging_client.egg-info/requires.txt
+messaging_client.egg-info/top_level.txt

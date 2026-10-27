@@ -1,0 +1,46 @@
+# Platform manifest: Python CLI
+# Consumed by the generator and by conformance/runner.py.
+# build_cmd and run_cmd both execute with cwd = out_dir, so `.` below is
+# clients/python -- that is what makes `python -m client` resolvable afterwards.
+#
+# A leading `python`, `python3`, or `py` token is resolved to the interpreter
+# currently running the build or the conformance runner, so the editable install
+# below lands in that same interpreter and no virtualenv juggling is needed.
+
+name: python
+out_dir: clients/python
+
+# Everything the generator is allowed to read as input, in order.
+spec_files:
+  - spec/core/README.md
+  - spec/core/protocol.md
+  - spec/core/client-behavior.md
+  - spec/core/cli-contract.md
+  - spec/platforms/python.md
+
+# No compile step; the build installs the generated package into the current
+# interpreter in editable mode, which both resolves `python -m client` from any
+# working directory and proves the generated pyproject.toml is well formed.
+build_cmd:
+  posix: python3 -m pip install -e .
+  windows: python -m pip install -e .
+
+# No extra environment is needed for this platform.
+env:
+  posix: {}
+  windows: {}
+
+# The runner appends --server <ws-url> --data-dir <path> (REQ-CLI-001).
+run_cmd:
+  posix: python3 -m client
+  windows: python -m client
+
+# Everything a regeneration deletes first, so each run starts from scratch.
+# No hand-provided bootstrap exists for this platform: every file below is
+# generated output.
+clean_globs:
+  - clients/python/client
+  - clients/python/pyproject.toml
+  - clients/python/**/__pycache__
+  - clients/python/*.egg-info
+  - clients/python/build

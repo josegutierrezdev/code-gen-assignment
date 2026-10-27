@@ -1,0 +1,63 @@
+name: first-launch-identity
+title: First-launch identity, auto-login on relaunch, and command error handling
+requirements:
+  - REQ-EVENT-002
+  - REQ-IDENTITY-002
+  - REQ-IDENTITY-003
+  - REQ-IDENTITY-004
+  - REQ-IDENTITY-005
+  - REQ-STATE-006
+  - REQ-CMD-005
+  - REQ-CMD-006
+  - REQ-CMD-007
+actors: [alice]
+
+# Single-actor scenario: the runner launches only the client playing alice.
+
+steps:
+  # REQ-EVENT-002: ready is the first line, and reports NO_IDENTITY on a fresh data-dir
+  - {actor: alice, expect: {type: ready, state: NO_IDENTITY}, timeout_ms: 10000}
+  - {actor: alice, expect_none: {type: logged_in}, window_ms: 500}
+
+  # REQ-STATE-006: a send before login is rejected and never queued
+  - {actor: alice, command: "send bob too early"}
+  - {actor: alice, expect: {type: error, code: not_logged_in}}
+  - {actor: alice, expect_none: {type: queued}, window_ms: 500}
+
+  # REQ-CMD-005 / REQ-CMD-006 / REQ-CMD-007: bad input errors, never crashes
+  - {actor: alice, command: "frobnicate"}
+  - {actor: alice, expect: {type: error, code: unknown_command}}
+  - {actor: alice, command: "login"}
+  - {actor: alice, expect: {type: error, code: bad_args}}
+  - {actor: alice, command: "login two names"}
+  - {actor: alice, expect: {type: error, code: bad_args}}
+
+  # REQ-IDENTITY-003: invalid characters are rejected locally, before any persistence
+  - {actor: alice, command: "login bad!name"}
+  - {actor: alice, expect: {type: error, code: bad_name}}
+  - {actor: alice, expect_none: {type: logged_in}, window_ms: 500}
+
+  # a valid login persists the identity and connects
+  - {actor: alice, command: "login alice"}
+  - {actor: alice, expect: {type: logged_in, name: alice}}
+  - {actor: alice, expect: {type: state, from: NO_IDENTITY, to: CONNECTING}}
+  - {actor: alice, expect: {type: state, from: CONNECTING, to: SYNCING}}
+  - {actor: alice, expect: {type: state, from: SYNCING, to: ONLINE}}
+
+  # REQ-IDENTITY-005: identity is immutable, even for the same name
+  - {actor: alice, command: "login alice"}
+  - {actor: alice, expect: {type: error, code: already_logged_in}}
+  - {actor: alice, command: "login carol"}
+  - {actor: alice, expect: {type: error, code: already_logged_in}}
+
+  # REQ-IDENTITY-004 / REQ-EVENT-002: on relaunch the identity is loaded from disk,
+  # ready reports OFFLINE, logged_in is re-emitted, and the client connects by itself
+  - {actor: alice, kill: true}
+  - {actor: alice, start: true}
+  - {actor: alice, expect: {type: ready, state: OFFLINE}, timeout_ms: 10000}
+  - {actor: alice, expect: {type: logged_in, name: alice}}
+  - {actor: alice, expect: {type: state, from: OFFLINE, to: CONNECTING}}
+  - {actor: alice, expect: {type: state, from: CONNECTING, to: SYNCING}}
+  - {actor: alice, expect: {type: state, from: SYNCING, to: ONLINE}}
+
+  - {actor: alice, command: "quit"}

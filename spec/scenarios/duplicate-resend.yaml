@@ -1,0 +1,78 @@
+name: duplicate-resend
+title: A resent message id is re-acked by the server and delivered exactly once
+requirements:
+  - REQ-DEDUP-001
+  - REQ-DEDUP-002
+  - REQ-DEDUP-004
+  - REQ-MSGID-003
+  - REQ-FLUSH-003
+  - REQ-INBOUND-004
+actors: [alice, bob]
+
+# A conformant client never reuses an id on its own, so the duplicate is produced by
+# restoring Alice's data-dir to a snapshot taken while the entry was still unacked.
+# That is exactly the state a client would be in if the ack had been lost in flight:
+# the outbox still holds the entry, and the flush after reconnect re-sends the same id.
+#
+# Both the snapshot and the restore happen with Alice's process stopped
+# (kill -> snapshot -> start, kill -> restore -> start). Copying a live client's
+# data-dir would race its own atomic writes and could capture a half-written set of
+# files, so the harness refuses it outright.
+
+steps:
+  - {actor: alice, expect: {type: ready, state: NO_IDENTITY}, timeout_ms: 10000}
+  - {actor: alice, command: "login alice"}
+  - {actor: alice, expect: {type: logged_in, name: alice}}
+  - {actor: alice, expect: {type: state, from: NO_IDENTITY, to: CONNECTING}}
+  - {actor: alice, expect: {type: state, from: CONNECTING, to: SYNCING}}
+  - {actor: alice, expect: {type: state, from: SYNCING, to: ONLINE}}
+
+  - {actor: bob, expect: {type: ready, state: NO_IDENTITY}, timeout_ms: 10000}
+  - {actor: bob, command: "login bob"}
+  - {actor: bob, expect: {type: logged_in, name: bob}}
+  - {actor: bob, expect: {type: state, from: NO_IDENTITY, to: CONNECTING}}
+  - {actor: bob, expect: {type: state, from: CONNECTING, to: SYNCING}}
+  - {actor: bob, expect: {type: state, from: SYNCING, to: ONLINE}}
+
+  # queue the message while offline, so it is on disk and provably unacked
+  - {actor: alice, command: "offline"}
+  - {actor: alice, expect: {type: state, from: ONLINE, to: OFFLINE}}
+  - {actor: alice, command: "send bob Exactly once please"}
+  - actor: alice
+    expect: {type: queued, to: bob, text: "Exactly once please"}
+    capture: {m1: id}
+
+  # stop the client, then capture the pre-ack state
+  - {actor: alice, kill: true}
+  - {actor: alice, snapshot: unacked}
+  - {actor: alice, start: true}
+
+  # first delivery: the restarted client auto-connects, flushes, and is acked once
+  - {actor: alice, expect: {type: ready, state: OFFLINE}, timeout_ms: 10000}
+  - {actor: alice, expect: {type: logged_in, name: alice}}
+  - {actor: alice, expect: {type: state, from: OFFLINE, to: CONNECTING}}
+  - {actor: alice, expect: {type: state, from: CONNECTING, to: SYNCING}}
+  - {actor: alice, expect: {type: state, from: SYNCING, to: ONLINE}}
+  - {actor: alice, expect: {type: sent, id: "$m1"}, timeout_ms: 5000}
+  - actor: bob
+    expect: {type: received, id: "$m1", from: alice, text: "Exactly once please"}
+    timeout_ms: 5000
+
+  # rewind Alice to the pre-ack state and relaunch: the same id is sent again
+  - {actor: alice, kill: true}
+  - {actor: alice, restore: unacked}
+  - {actor: alice, start: true}
+  - {actor: alice, expect: {type: ready, state: OFFLINE}, timeout_ms: 10000}
+  - {actor: alice, expect: {type: logged_in, name: alice}}
+  - {actor: alice, expect: {type: state, from: OFFLINE, to: CONNECTING}}
+  - {actor: alice, expect: {type: state, from: CONNECTING, to: SYNCING}}
+  - {actor: alice, expect: {type: state, from: SYNCING, to: ONLINE}}
+  # REQ-DEDUP-002: the repeated send is a success and is re-acked, never an error
+  - {actor: alice, expect: {type: sent, id: "$m1"}, timeout_ms: 5000}
+  - {actor: alice, expect_none: {type: error}, window_ms: 1000}
+
+  # REQ-DEDUP-002 / REQ-INBOUND-004: Bob must NOT be delivered a second copy
+  - {actor: bob, expect_none: {type: received}, window_ms: 3000}
+
+  - {actor: alice, command: "quit"}
+  - {actor: bob, command: "quit"}

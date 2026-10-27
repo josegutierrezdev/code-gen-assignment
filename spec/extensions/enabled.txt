@@ -1,0 +1,2 @@
+# One enabled extension module per line (bare name, no path, no .md).
+# Blank lines and # comments are ignored. See README.md.
